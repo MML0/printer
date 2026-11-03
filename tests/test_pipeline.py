@@ -261,15 +261,15 @@ class UsbTransportTest(unittest.TestCase):
 
     def test_light_rows_need_no_break_and_dark_rows_rest(self):
         light = np.full(400, 0.04)                       # 16 rows' worth in total
-        self.assertEqual(commands.segment_rows(light), [(0, 400)])
+        self.assertEqual(commands.segment_rows(light, budget=20, min_rows=8), [(0, 400)])
         dark = np.full(200, 0.6)
         dark[30] = 0.1                                   # a light row near the first limit
-        runs = commands.segment_rows(dark)
+        runs = commands.segment_rows(dark, budget=20, min_rows=8)
         self.assertEqual(runs[0], (0, 31))               # breaks right after the light row
         self.assertEqual(runs[-1][1], 200)
         self.assertTrue(all(b == c for (_, b), (c, _) in zip(runs, runs[1:])))
         for y0, y1 in runs:
-            self.assertLessEqual(dark[y0:y1].sum(), commands.BLACK_BUDGET + 1)
+            self.assertLessEqual(dark[y0:y1].sum(), 21)
 
     def test_pause_grows_with_black_and_last_segment_does_not_wait(self):
         a = np.full((120, 512), 255, dtype=np.uint8)

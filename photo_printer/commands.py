@@ -29,16 +29,16 @@ PARTIAL_CUT = GS + b"V\x01"
 DEFAULT_BAND = 48
 
 # The SRP-350III's power supply can't keep up with long dark stretches: a 50%-black
-# strip reset the printer (it dropped off USB for ~4 s) after ~1 cm (~35 rows' worth
-# of black dots), a 15% strip of 200 rows (~30 rows' worth) printed fine, and the
-# 50% strip survived when sent 16 rows at a time with 0.4 s pauses. Each pause
-# leaves a thin white line, and the printer's speed/density/heating commands don't
-# lower the load, so: a segment ends once it holds BLACK_BUDGET rows' worth of black
-# dots, at the lightest row nearby (where a line shows least), and is followed by a
-# pause of PAUSE_PER_BLACK_ROW per row's worth. Light areas print without a break.
-BLACK_BUDGET = 20.0
+# strip reset the printer (it dropped off USB for ~4 s) after ~1 cm, a 15% strip
+# printed fine, and the 50% strip survived when sent in pieces with pauses. The
+# printer's speed/density/heating commands don't lower the load, so pauses it is.
+# A long pause lets the head cool, and the next rows come out a shade lighter (a
+# visible band in dark areas). Side-by-side prints were smoothest with tiny pieces:
+# a segment ends once it holds BLACK_BUDGET rows' worth of black dots (~2 rows at
+# 50%), followed by PAUSE_PER_BLACK_ROW per row's worth. Light areas don't wait.
+BLACK_BUDGET = 1.0
 PAUSE_PER_BLACK_ROW = 0.05
-MIN_SEGMENT_ROWS = 8
+MIN_SEGMENT_ROWS = 2
 
 
 def feed_lines(n: int) -> bytes:
@@ -91,14 +91,14 @@ def segment_rows(black: np.ndarray, budget: float = BLACK_BUDGET,
 
 
 def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4, band: int = DEFAULT_BAND,
-                   budget: float = BLACK_BUDGET) -> list[tuple[bytes, float]]:
+                   budget: float = BLACK_BUDGET, min_rows: int = MIN_SEGMENT_ROWS) -> list[tuple[bytes, float]]:
     """The print job for one image as (bytes, seconds to wait afterwards) segments.
     Joined together the bytes are a complete, self-contained job."""
     if img.mode != "1":
         img = img.convert("1")
     black = (~np.asarray(img, dtype=bool)).mean(axis=1)
     out = []
-    for y0, y1 in segment_rows(black, budget):
+    for y0, y1 in segment_rows(black, budget, min_rows):
         seg = img.crop((0, y0, img.width, y1))
         out.append([raster(seg, band) if y1 > y0 else b"", PAUSE_PER_BLACK_ROW * float(black[y0:y1].sum())])
     out[-1][1] = 0.0
