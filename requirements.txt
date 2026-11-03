@@ -1,0 +1,3 @@
+pillow>=9.1
+numpy>=1.21
+pyusb>=1.2   # only needed for direct USB (--printer usb); also run: brew install libusb

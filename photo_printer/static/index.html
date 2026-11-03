@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thermal Photo</title>
+<style>
+  :root {
+    --bg: #f3f2ef; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e2e1dd;
+    --accent: #1d1d1f; --accent-text: #ffffff; --ok: #1f8a4c; --warn: #b26a00; --bad: #c62828;
+    --paper: #fbfbf8; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161617; --panel: #1f1f21; --text: #f2f2f2; --muted: #9a9aa0; --line: #2f2f33;
+      --accent: #f2f2f2; --accent-text: #161617; --ok: #4cc27f; --warn: #e0a040; --bad: #ff6b6b;
+      --paper: #f4f4f0; --shadow: 0 8px 30px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+  .pill { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; min-width: 0; }
+  #pstatus { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  main { display: grid; grid-template-columns: 1fr 340px; min-height: calc(100vh - 53px); }
+  .stage { padding: 28px 20px 40px; display: flex; flex-direction: column; align-items: center; gap: 12px; overflow: auto; }
+  .paper { background: var(--paper); box-shadow: var(--shadow); padding: 18px 0 26px; width: max-content; max-width: 100%;
+           display: flex; justify-content: center; position: relative; }
+  .paper img { display: block; image-rendering: pixelated; image-rendering: crisp-edges; max-width: 100%; cursor: zoom-in; }
+  .paper img.zoom { cursor: zoom-out; max-width: none; }
+  .paper.busy img { opacity: .55; transition: opacity .15s .15s; }
+  .meta { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: center; }
+  .drop { width: min(512px, 100%); aspect-ratio: 3 / 4; border: 2px dashed var(--line); border-radius: 14px;
+          display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; cursor: pointer; }
+  .drop strong { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+  body.dragging .drop, body.dragging .paper { outline: 3px solid var(--ok); outline-offset: 6px; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 18px 18px 28px; display: flex; flex-direction: column; gap: 18px; overflow: auto; }
+  h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 10px; margin: 7px 0; }
+  .row label { color: var(--text); }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
+  .row.off { opacity: .4; pointer-events: none; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  select, button, input[type=text] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                                     border-radius: 8px; padding: 7px 10px; }
+  select { width: 100%; }
+  .checks { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+  .checks label { display: flex; align-items: center; gap: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .seg button { padding: 6px 0; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .print { width: 100%; padding: 12px; font-size: 15px; font-weight: 600; background: var(--accent); color: var(--accent-text); border-color: var(--accent); border-radius: 10px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; }
+  .msg { min-height: 20px; font-size: 13px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); } .msg.warn { color: var(--warn); }
+  .printer-row { display: flex; gap: 6px; } .printer-row input { flex: 1; min-width: 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+    .stage { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Thermal Photo</h1>
+  <div class="pill"><span class="dot" id="dot"></span><span id="pstatus">Checking printer…</span></div>
+</header>
+<main>
+  <section class="stage">
+    <div class="drop" id="drop"><div><strong>Drop a photo here</strong>or click to choose (JPEG, PNG, HEIC)</div></div>
+    <div class="paper" id="paper" hidden><img id="preview" alt="Print preview"></div>
+    <div class="meta" id="meta"></div>
+    <label class="meta" id="compareWrap" hidden><input type="checkbox" id="compare"> show before dithering</label>
+  </section>
+
+  <aside>
+    <div>
+      <h2>Photo</h2>
+      <button id="choose" style="width:100%">Choose photo…</button>
+      <input type="file" id="file" accept="image/*,.heic,.heif" hidden>
+    </div>
+
+    <div>
+      <h2>Preset</h2>
+      <select id="preset"></select>
+    </div>
+
+    <div>
+      <h2>Dithering</h2>
+      <select id="dither">
+        <option value="floyd_steinberg">Floyd–Steinberg (smooth photos)</option>
+        <option value="atkinson">Atkinson (punchy, retro)</option>
+        <option value="stucki">Stucki (soft gradients)</option>
+        <option value="bayer">Bayer (pattern / newspaper)</option>
+        <option value="threshold">Threshold (no dither, logos)</option>
+      </select>
+      <div class="row" id="thresholdRow"><label for="threshold">Threshold</label><input type="range" id="threshold" min="0" max="255" step="1"><output></output></div>
+    </div>
+
+    <div>
+      <h2>Adjust</h2>
+      <div class="row"><label for="brightness">Brightness</label><input type="range" id="brightness" min="0.3" max="2" step="0.01"><output></output></div>
+      <div class="row"><label for="contrast">Contrast</label><input type="range" id="contrast" min="0.3" max="2.5" step="0.01"><output></output></div>
+      <div class="row"><label for="gamma">Gamma</label><input type="range" id="gamma" min="0.4" max="3" step="0.01"><output></output></div>
+      <div class="row"><label for="sharpness">Sharpness</label><input type="range" id="sharpness" min="0" max="4" step="0.05"><output></output></div>
+      <div class="row"><label for="width">Width (dots)</label><input type="range" id="width" min="128" max="512" step="8"><output></output></div>
+      <div class="checks">
+        <label><input type="checkbox" id="auto_contrast"> Auto-contrast</label>
+        <label><input type="checkbox" id="invert"> Invert</label>
+      </div>
+    </div>
+
+    <div>
+      <h2>Rotate</h2>
+      <div class="seg" id="rotate">
+        <button data-r="0">0°</button><button data-r="90">90°</button><button data-r="180">180°</button><button data-r="270">270°</button>
+      </div>
+      <p class="hint">90° prints a landscape photo across the full roll width.</p>
+    </div>
+
+    <div>
+      <button class="print" id="print" disabled>Print</button>
+      <div class="actions">
+        <button id="test">Test page</button>
+        <button id="cut">Feed + cut</button>
+        <button id="reset">Reset</button>
+      </div>
+      <p class="msg" id="msg" role="status"></p>
+    </div>
+
+    <div>
+      <h2>Printer</h2>
+      <div class="printer-row">
+        <input type="text" id="spec" spellcheck="false" aria-label="Printer connection">
+        <button id="check">Check</button>
+      </div>
+      <p class="hint">auto · usb · cups:NAME · serial:/dev/cu.… · net:IP · file:out.bin</p>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const SLIDERS = ["brightness", "contrast", "gamma", "sharpness", "width", "threshold"];
+const CHECKS = ["auto_contrast", "invert"];
+const PRESETS = {
+  "Default":               {},
+  "Portrait":              {brightness: 1.05, contrast: 1.1, gamma: 1.25, sharpness: 1.6},
+  "Dark photo":            {brightness: 1.3, gamma: 1.6, sharpness: 1.3},
+  "Bright / high-key":     {brightness: 0.95, contrast: 1.25},
+  "Vintage receipt":       {dither: "atkinson", contrast: 1.2, gamma: 1.1, sharpness: 1.5},
+  "Newspaper":             {dither: "bayer", contrast: 1.15, gamma: 1.15},
+  "Logo / drawing":        {dither: "threshold", contrast: 1.3, auto_contrast: false},
+};
+let defaults = {}, settings = {}, hasImage = false, inflight = null, timer = null;
+
+function load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
+function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+
+function fmt(id, v) { return id === "width" || id === "threshold" ? String(Math.round(v)) : Number(v).toFixed(2); }
+
+function syncUI() {
+  for (const id of SLIDERS) { $(id).value = settings[id]; $(id).nextElementSibling.value = fmt(id, settings[id]); }
+  for (const id of CHECKS) $(id).checked = !!settings[id];
+  $("dither").value = settings.dither;
+  $("thresholdRow").classList.toggle("off", settings.dither !== "threshold");
+  for (const b of $("rotate").children) b.classList.toggle("on", Number(b.dataset.r) === settings.rotate);
+}
+
+function setMsg(text, kind = "") { $("msg").textContent = text; $("msg").className = "msg " + kind; }
+
+function changed() { syncUI(); save("settings", settings); schedulePreview(); }
+
+function schedulePreview() { clearTimeout(timer); timer = setTimeout(preview, 90); }
+
+async function preview() {
+  if (!hasImage) return;
+  inflight?.abort();
+  inflight = new AbortController();
+  $("paper").classList.add("busy");
+  try {
+    const r = await fetch("/api/preview", { method: "POST", signal: inflight.signal,
+      body: JSON.stringify({ settings, stage: $("compare").checked ? "adjust" : "dither" }) });
+    if (!r.ok) throw new Error((await r.json()).error);
+    const url = URL.createObjectURL(await r.blob());
+    const img = $("preview"), old = img.src;
+    img.onload = () => { if (old) URL.revokeObjectURL(old); };
+    img.src = url;
+    const [w, h] = r.headers.get("X-Dots").split("x"), [mw, mh] = r.headers.get("X-MM").split("x");
+    $("meta").textContent = `${w} × ${h} dots  ·  prints ${mw} × ${mh} mm`;
+    $("paper").classList.remove("busy");
+  } catch (e) {
+    if (e.name !== "AbortError") { setMsg(e.message, "bad"); $("paper").classList.remove("busy"); }
+  }
+}
+
+async function upload(file) {
+  if (!file) return;
+  setMsg("Loading photo…");
+  try {
+    const r = await fetch("/api/image", { method: "POST", body: file, headers: { "X-Filename": encodeURIComponent(file.name) } });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    showImage();
+    setMsg("");
+  } catch (e) { setMsg(e.message, "bad"); }
+}
+
+function showImage() {
+  hasImage = true;
+  $("drop").hidden = true; $("paper").hidden = false; $("compareWrap").hidden = false; $("print").disabled = false;
+  preview();
+}
+
+async function action(path, label, body) {
+  const buttons = ["print", "test", "cut"].map($);
+  buttons.forEach((b) => (b.disabled = true));
+  setMsg(label + "…");
+  try {
+    const r = await fetch(path, { method: "POST", body: JSON.stringify(body || { settings }) });
+    const j = await r.json();
+    if (!r.ok) {
+      setMsg(j.error + (j.partial ? " (may be half-printed — check the paper)" : ""), "bad");
+    } else {
+      const extra = j.job.length_mm ? ` · ${j.job.length_mm} mm` : "";
+      setMsg(`Sent to ${j.job.printer}${extra}`, "ok");
+    }
+  } catch (e) { setMsg("Lost connection to the app: " + e.message, "bad"); }
+  buttons.forEach((b) => (b.disabled = false));
+  $("print").disabled = !hasImage;
+  checkPrinter();
+}
+
+async function checkPrinter(spec) {
+  $("dot").className = "dot"; $("pstatus").textContent = "Checking printer…";
+  try {
+    const r = spec === undefined ? await fetch("/api/status")
+      : await fetch("/api/printer", { method: "POST", body: JSON.stringify({ spec }) });
+    const j = await r.json();
+    if (j.error) { $("dot").className = "dot bad"; $("pstatus").textContent = j.error; return; }
+    if (j.problem) { $("dot").className = "dot bad"; $("pstatus").textContent = j.problem; return; }
+    const st = j.status;
+    if (!st || !st.responded) { $("dot").className = "dot warn"; $("pstatus").textContent = `${j.printer} · no status reply`; return; }
+    $("dot").className = "dot ok";
+    $("pstatus").textContent = `${j.printer} · ready` + (st.paper_near_end ? " (paper low)" : "");
+  } catch { $("dot").className = "dot bad"; $("pstatus").textContent = "App not running"; }
+}
+
+async function init() {
+  const info = await (await fetch("/api/info")).json();
+  defaults = info.defaults;
+  settings = { ...defaults, ...load("settings", {}) };
+  $("spec").value = info.printer;
+  const sel = $("preset");
+  sel.append(new Option("Choose a preset…", ""));
+  for (const name of Object.keys(PRESETS)) sel.append(new Option(name, name));
+  syncUI();
+  if (info.image) showImage();
+  checkPrinter();
+}
+
+for (const id of SLIDERS) $(id).addEventListener("input", (e) => { settings[id] = Number(e.target.value); changed(); });
+for (const id of CHECKS) $(id).addEventListener("change", (e) => { settings[id] = e.target.checked; changed(); });
+$("dither").addEventListener("change", (e) => { settings.dither = e.target.value; changed(); });
+$("rotate").addEventListener("click", (e) => { if (e.target.dataset.r) { settings.rotate = Number(e.target.dataset.r); changed(); } });
+$("preset").addEventListener("change", (e) => {
+  if (!e.target.value) return;
+  settings = { ...defaults, width: settings.width, rotate: settings.rotate, ...PRESETS[e.target.value] };
+  e.target.value = ""; changed();
+});
+$("reset").addEventListener("click", () => { settings = { ...defaults }; changed(); setMsg(""); });
+$("compare").addEventListener("change", preview);
+$("preview").addEventListener("click", (e) => e.target.classList.toggle("zoom"));
+$("choose").addEventListener("click", () => $("file").click());
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => upload(e.target.files[0]));
+$("print").addEventListener("click", () => action("/api/print", "Printing", { settings, cut: true }));
+$("test").addEventListener("click", () => action("/api/test", "Printing test page"));
+$("cut").addEventListener("click", () => action("/api/cut", "Cutting"));
+$("check").addEventListener("click", () => checkPrinter($("spec").value));
+$("spec").addEventListener("keydown", (e) => { if (e.key === "Enter") checkPrinter($("spec").value); });
+addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
+addEventListener("dragleave", (e) => { if (!e.relatedTarget) document.body.classList.remove("dragging"); });
+addEventListener("drop", (e) => { e.preventDefault(); document.body.classList.remove("dragging"); upload(e.dataTransfer.files[0]); });
+init();
+</script>
+</body>
+</html>
