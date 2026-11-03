@@ -207,16 +207,62 @@ class UsbTransportTest(unittest.TestCase):
         p.send(data)
         self.assertEqual(bytes(received), data)
 
-    def test_status_reads_one_reply_per_query(self):
-        p, _ = self.make(replies=[0x16, 0x12, 0x12, 0x12])
+    def bixolon_like(self, stale=b""):
+        """Fake that behaves like the real SRP-350III on macOS: answers arrive a few
+        reads late, reads return empty until then, old answers can still be queued."""
+        answers = {1: 0x16, 2: 0x12, 3: 0x12, 4: 0x1E}
+        ready, pending = bytearray(stale), []
+
+        class InEp:
+            bEndpointAddress = 0x81
+
+            def read(self, n, timeout):
+                for item in pending:
+                    item[0] -= 1
+                while pending and pending[0][0] <= 0:
+                    ready.append(pending.pop(0)[1])
+                out = bytes(ready)
+                ready.clear()
+                return out
+
+        class OutEp:
+            bEndpointAddress = 0x02
+
+            def write(self, data, timeout):
+                data = bytes(data)
+                if data[:2] == b"\x10\x04":
+                    pending.append([3, answers[data[2]]])
+                return len(data)
+
+        p = printers.UsbPrinter()
+        p._open = lambda: (object(), 0, OutEp(), InEp(), False)
+        p._close = lambda *a: None
+        return p
+
+    def test_status_with_late_answers_and_leftovers(self):
+        p = self.bixolon_like(stale=bytes([0x16, 0x12, 0x12, 0x1E, 0x1E]))
         st = p.status()
-        self.assertTrue(st["responded"] and st["online"])
+        self.assertTrue(st["responded"])
+        self.assertTrue(st["online"])
+        self.assertFalse(st["cover_open"])   # was misread as OPEN before the fix
+        self.assertFalse(st["paper_end"])
+        self.assertTrue(st["paper_near_end"])
+        self.assertIsNone(commands.blocking_problem(st))
         self.assertIsNone(st["port"])  # fake device has no control endpoint
+
+    def test_status_twice_in_a_row_stays_aligned(self):
+        p = self.bixolon_like()
+        for _ in range(3):
+            self.assertEqual(p.status()["raw"], {1: "0x16", 2: "0x12", 3: "0x12", 4: "0x1e"})
+
+    def test_debug_status_lists_every_question(self):
+        lines = self.bixolon_like(stale=b"\x1e").debug_status()
+        self.assertIn("cleared 1 leftover byte(s): 1e", "\n".join(lines))
+        self.assertTrue(any("round 2  DLE EOT 4: 0x1e" in line for line in lines))
 
     def test_status_survives_silent_printer(self):
         p, _ = self.make(replies=[])
         self.assertFalse(p.status()["responded"])
-        self.assertTrue(any("DLE EOT 4" in line for line in p.debug_status()))
 
     def test_timeout_is_reported_as_partial(self):
         p, _ = self.make(fail_after=8192)

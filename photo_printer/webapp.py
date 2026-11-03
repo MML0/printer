@@ -126,6 +126,8 @@ def make_handler(state: State):
                 self._error(str(e))
 
         def _status(self):
+            if state.print_lock.locked():
+                return self._json({"printer": state.printer_spec, "warning": "printing…", "status": None})
             try:
                 p = printers.open_printer(state.printer_spec)
                 st = p.status()

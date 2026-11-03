@@ -10,6 +10,14 @@ python3 setup_check.py
 ```
 
 Installs everything, looks for the printer, offers a test page, and saves `setup-report.txt`.
+
+Then start the app, either by double-clicking `start-app.command` in Finder, or:
+
+```bash
+.venv/bin/python thermal.py app
+```
+
+Your browser opens at http://127.0.0.1:8350. Press Ctrl+C in the terminal to stop it.
 The steps below do the same thing by hand.
 
 ## 1. Install (once)

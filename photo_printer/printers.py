@@ -215,19 +215,52 @@ class UsbPrinter(Printer):
         except Exception:
             return None
 
-    def status(self) -> dict | None:
+    # The SRP-350III answers DLE EOT a few ms late and returns empty reads until the
+    # answer is ready, so: clear leftovers, then ask one question at a time and poll
+    # until that question's byte arrives.
+
+    @staticmethod
+    def _read(ep_in, timeout_ms: int) -> bytes:
         import usb.core
+        try:
+            return bytes(ep_in.read(64, timeout_ms))
+        except usb.core.USBError:  # timeout or no data
+            return b""
+
+    def _drain(self, ep_in) -> bytes:
+        """Throw away status bytes left over from earlier questions."""
+        junk, empties = bytearray(), 0
+        for _ in range(60):
+            data = self._read(ep_in, 20)
+            if data:
+                junk += data
+                empties = 0
+            else:
+                empties += 1
+                if empties >= 3:
+                    break
+                time.sleep(0.01)
+        return bytes(junk)
+
+    def _ask(self, ep_out, ep_in, cmd: bytes, wait: float = 0.6) -> tuple[int | None, float]:
+        """Send one status question; return (answer byte or None, seconds it took)."""
+        t0 = time.monotonic()
+        ep_out.write(cmd, 1000)
+        while time.monotonic() - t0 < wait:
+            data = self._read(ep_in, 100)
+            if data:
+                return data[-1], time.monotonic() - t0
+            time.sleep(0.005)
+        return None, time.monotonic() - t0
+
+    def status(self) -> dict | None:
         dev, n, ep_out, ep_in, detached = self._open()
         try:
             raw = {}
             if ep_in is not None:
+                self._drain(ep_in)
                 for q, cmd in commands.STATUS_QUERIES.items():
-                    try:
-                        ep_out.write(cmd, 1000)
-                        resp = bytes(ep_in.read(64, 1000))
-                        raw[q] = resp[-1] if resp else None
-                    except usb.core.USBError:
-                        raw[q] = None
+                    raw[q], _ = self._ask(ep_out, ep_in, cmd)
             st = commands.parse_status(raw)
             st["port"] = commands.parse_port_status(self._port_status(dev, n))
             return st
@@ -244,16 +277,16 @@ class UsbPrinter(Printer):
             lines.append(f"USB port status: {commands.parse_port_status(ps)}")
             if ep_in is None:
                 return lines
+            junk = self._drain(ep_in)
+            lines.append(f"cleared {len(junk)} leftover byte(s): {junk.hex(' ') or '-'}")
             for rnd in (1, 2):
                 for q, cmd in commands.STATUS_QUERIES.items():
-                    t = time.monotonic()
                     try:
-                        ep_out.write(cmd, 1000)
-                        data = bytes(ep_in.read(64, 2000))
-                        res = data.hex(" ") or "(empty)"
+                        b, dt = self._ask(ep_out, ep_in, cmd)
+                        res = "no answer" if b is None else f"0x{b:02x}"
                     except Exception as e:
-                        res = f"{type(e).__name__}: {e}"
-                    lines.append(f"round {rnd}  DLE EOT {q}: {res}  ({(time.monotonic() - t) * 1000:.0f} ms)")
+                        res, dt = f"{type(e).__name__}: {e}", 0.0
+                    lines.append(f"round {rnd}  DLE EOT {q}: {res}  ({dt * 1000:.0f} ms)")
         finally:
             self._close(dev, n, detached)
         return lines
