@@ -23,18 +23,16 @@ BOLD_ON, BOLD_OFF = ESC + b"E\x01", ESC + b"E\x00"
 SIZE_NORMAL, SIZE_DOUBLE = GS + b"!\x00", GS + b"!\x11"
 PARTIAL_CUT = GS + b"V\x01"
 
-# Rows per GS v 0 command (the format's limit is 2047). Keep images in as few
-# commands as possible: the SRP-350III leaves a thin white line wherever one GS v 0
-# ends and the next begins after a pause.
-DEFAULT_BAND = 2047
+# A single GS v 0 command can describe a huge image, but sending it in bands
+# keeps every command small. 48 rows = 3 KB, below the 56-row bands of the test
+# page that printed fine on the SRP-350III (a 256-row photo stopped after ~1 cm).
+DEFAULT_BAND = 48
 
 # The SRP-350III's power supply can't keep up with long dark stretches: a 50%-black
 # strip reset the printer (it dropped off USB for ~4 s) after ~1 cm, a 15% strip
 # printed fine, and the same 50% strip survived when sent 16 rows at a time with
 # 0.4 s pauses. So photos go out in 16-row segments, each followed by a pause that
-# grows with its share of black dots (white rows don't wait at all). Segments cut
-# the data in the middle of a GS v 0 command, so the printer just waits for more
-# rows and the pauses leave no white lines.
+# grows with its share of black dots (white rows don't wait at all).
 SEGMENT_ROWS = 16
 PAUSE_FULL_BLACK = 0.8  # seconds after an all-black segment
 
@@ -64,35 +62,24 @@ def raster(img: Image.Image, band: int = DEFAULT_BAND) -> bytes:
     out = bytearray()
     for y in range(0, rows, band):
         n = min(band, rows - y)
-        out += raster_header(width_bytes, n)
+        out += GS + b"v0\x00"
+        out += bytes([width_bytes & 0xFF, width_bytes >> 8, n & 0xFF, n >> 8])
         out += data[y * width_bytes:(y + n) * width_bytes]
     return bytes(out)
-
-
-def raster_header(width_bytes: int, rows: int) -> bytes:
-    return GS + b"v0\x00" + bytes([width_bytes & 0xFF, width_bytes >> 8, rows & 0xFF, rows >> 8])
 
 
 def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4, band: int = DEFAULT_BAND,
                    rows: int = SEGMENT_ROWS, pause: float = PAUSE_FULL_BLACK) -> list[tuple[bytes, float]]:
     """The print job for one image as (bytes, seconds to wait afterwards) segments of
     `rows` rows. Joined together the bytes are a complete, self-contained job."""
-    width_bytes, height, data = pack_rows(img)
-    black = np.unpackbits(np.frombuffer(data, dtype=np.uint8).reshape(height, width_bytes), axis=1)
-    band = max(1, min(band, 2047))
-    out = []
-    for y in range(0, height, rows):
-        n = min(rows, height - y)
-        seg = bytearray()
-        for r in range(y, y + n):
-            if r % band == 0:  # a new GS v 0 starts here; otherwise this continues the last one
-                seg += raster_header(width_bytes, min(band, height - r))
-            seg += data[r * width_bytes:(r + 1) * width_bytes]
-        out.append([bytes(seg), pause * float(black[y:y + n].mean())])
-    out = out or [[b"", 0.0]]
+    if img.mode != "1":
+        img = img.convert("1")
+    segs = [img.crop((0, y, img.width, min(img.height, y + rows)))
+            for y in range(0, img.height, rows)] or [img]
+    out = [[raster(s, band), pause * float((~np.asarray(s, dtype=bool)).mean())] for s in segs]
     out[0][0] = INIT + ALIGN_CENTER + out[0][0]
     out[-1][0] += feed_lines(feed) + (PARTIAL_CUT if cut else b"")
-    return [(seg, wait) for seg, wait in out]
+    return [(data, wait) for data, wait in out]
 
 
 def image_job(img: Image.Image, *, cut: bool = True, feed: int = 4,
