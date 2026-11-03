@@ -19,6 +19,7 @@ import select
 import shutil
 import socket
 import subprocess
+import time
 
 from . import commands
 
@@ -205,33 +206,57 @@ class UsbPrinter(Printer):
         finally:
             self._close(dev, n, detached)
 
+    @staticmethod
+    def _port_status(dev, n) -> int | None:
+        """USB printer-class GET_PORT_STATUS (a control request, no bulk read needed)."""
+        try:
+            b = bytes(dev.ctrl_transfer(0xA1, 1, 0, n, 1, 1000))
+            return b[0] if b else None
+        except Exception:
+            return None
+
     def status(self) -> dict | None:
         import usb.core
         dev, n, ep_out, ep_in, detached = self._open()
         try:
-            if ep_in is None:
-                return None
-            _drain(lambda: bytes(ep_in.read(64, 50)), usb.core.USBError)
             raw = {}
-            for q, cmd in commands.STATUS_QUERIES.items():
-                ep_out.write(cmd, 1000)
-                try:
-                    resp = bytes(ep_in.read(64, 500))
-                    raw[q] = resp[-1] if resp else None
-                except usb.core.USBError:
-                    raw[q] = None
-            return commands.parse_status(raw)
+            if ep_in is not None:
+                for q, cmd in commands.STATUS_QUERIES.items():
+                    try:
+                        ep_out.write(cmd, 1000)
+                        resp = bytes(ep_in.read(64, 1000))
+                        raw[q] = resp[-1] if resp else None
+                    except usb.core.USBError:
+                        raw[q] = None
+            st = commands.parse_status(raw)
+            st["port"] = commands.parse_port_status(self._port_status(dev, n))
+            return st
         finally:
             self._close(dev, n, detached)
 
-
-def _drain(read, errors, limit: int = 20):
-    for _ in range(limit):
+    def debug_status(self) -> list[str]:
+        """Step-by-step status probe with timings, for diagnosing status problems."""
+        dev, n, ep_out, ep_in, detached = self._open()
+        lines = [f"device {self.name}: interface {n}, OUT 0x{ep_out.bEndpointAddress:02x}, "
+                 f"IN {'none' if ep_in is None else f'0x{ep_in.bEndpointAddress:02x}'}"]
         try:
-            if not read():
-                return
-        except errors:
-            return
+            ps = self._port_status(dev, n)
+            lines.append(f"USB port status: {commands.parse_port_status(ps)}")
+            if ep_in is None:
+                return lines
+            for rnd in (1, 2):
+                for q, cmd in commands.STATUS_QUERIES.items():
+                    t = time.monotonic()
+                    try:
+                        ep_out.write(cmd, 1000)
+                        data = bytes(ep_in.read(64, 2000))
+                        res = data.hex(" ") or "(empty)"
+                    except Exception as e:
+                        res = f"{type(e).__name__}: {e}"
+                    lines.append(f"round {rnd}  DLE EOT {q}: {res}  ({(time.monotonic() - t) * 1000:.0f} ms)")
+        finally:
+            self._close(dev, n, detached)
+        return lines
 
 
 # --------------------------------------------------------------------------- CUPS

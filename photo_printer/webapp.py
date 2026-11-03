@@ -130,7 +130,8 @@ def make_handler(state: State):
                 p = printers.open_printer(state.printer_spec)
                 st = p.status()
                 return self._json({"printer": p.name, "status": st,
-                                   "problem": commands.blocking_problem(st)})
+                                   "problem": commands.blocking_problem(st),
+                                   "warning": commands.status_warning(st)})
             except printers.PrinterError as e:
                 return self._json({"printer": state.printer_spec, "error": str(e)})
             except Exception as e:  # e.g. a raw USB error while probing

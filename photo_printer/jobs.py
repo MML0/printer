@@ -34,11 +34,15 @@ def preflight(printer: Printer) -> dict | None:
     return st
 
 
-def send_job(printer: Printer, data: bytes, kind: str, extra: dict | None = None) -> dict:
+def send_job(printer: Printer, data: bytes, kind: str, extra: dict | None = None,
+             check: bool = True) -> dict:
+    """Send one job. check=False skips the status check (for when status reading misbehaves)."""
     job = {"id": uuid.uuid4().hex[:8], "time": time.strftime("%Y-%m-%d %H:%M:%S"),
            "kind": kind, "printer": printer.name, "bytes": len(data), **(extra or {})}
     try:
-        job["status_before"] = preflight(printer)
+        if check:
+            job["status_before"] = preflight(printer)
+            job["warning"] = commands.status_warning(job["status_before"])
         printer.send(data)
     except PrinterError as e:
         job["result"] = "unknown" if e.partial else "failed"
@@ -52,14 +56,14 @@ def send_job(printer: Printer, data: bytes, kind: str, extra: dict | None = None
 
 
 def print_bitmap(printer: Printer, bitmap: Image.Image, *, cut: bool = True,
-                 band: int = commands.DEFAULT_BAND, max_rows: int = MAX_ROWS) -> dict:
+                 band: int = commands.DEFAULT_BAND, max_rows: int = MAX_ROWS, check: bool = True) -> dict:
     if bitmap.height > max_rows:
         raise PrinterError(f"Image is {bitmap.height} dots tall ({bitmap.height / DPI * 25.4:.0f} mm); "
                            f"the limit is {max_rows}. Use rotate=90 or a smaller width.")
     data = commands.image_job(bitmap, cut=cut, band=band)
     return send_job(printer, data, "photo", {
         "width": bitmap.width, "height": bitmap.height,
-        "length_mm": round(bitmap.height / DPI * 25.4, 1)})
+        "length_mm": round(bitmap.height / DPI * 25.4, 1)}, check=check)
 
 
 def print_photo(printer: Printer, src, settings: imaging.Settings, **kw) -> dict:
@@ -101,10 +105,10 @@ def test_page(width: int = 512) -> bytes:
     return bytes(out)
 
 
-def print_test_page(printer: Printer, width: int = 512) -> dict:
-    return send_job(printer, test_page(width), "test-page")
+def print_test_page(printer: Printer, width: int = 512, check: bool = True) -> dict:
+    return send_job(printer, test_page(width), "test-page", check=check)
 
 
-def feed_and_cut(printer: Printer, cut: bool = True) -> dict:
+def feed_and_cut(printer: Printer, cut: bool = True, check: bool = True) -> dict:
     data = commands.INIT + commands.feed_lines(4) + (commands.PARTIAL_CUT if cut else b"")
-    return send_job(printer, data, "cut" if cut else "feed")
+    return send_job(printer, data, "cut" if cut else "feed", check=check)

@@ -115,6 +115,37 @@ def blocking_problem(st: dict | None) -> str | None:
         return "Auto-cutter error. Turn the printer off, clear any jam, turn it on again."
     if st.get("unrecoverable_error"):
         return "The printer reports an unrecoverable error. Power-cycle it."
-    if st.get("online") is False:
-        return "The printer is offline (cover open, paper out or an error)."
     return None
+
+
+def status_warning(st: dict | None) -> str | None:
+    """Something worth showing, but not a reason to refuse the job."""
+    if not st or not st.get("responded"):
+        return None
+    if st.get("online") is False:
+        return "Printer reports 'offline' (check the lid, paper and error light)."
+    if st.get("paper_near_end"):
+        return "Paper is running low."
+    return None
+
+
+def parse_port_status(b: int | None) -> dict | None:
+    """USB printer-class GET_PORT_STATUS byte (IEEE 1284 style)."""
+    if b is None:
+        return None
+    return {"raw": f"0x{b:02x}", "paper_empty": bool(b & 0x20),
+            "selected": bool(b & 0x10), "no_error": bool(b & 0x08)}
+
+
+def describe(st: dict | None) -> str:
+    """One-line human summary of a parsed status."""
+    if st is None:
+        return "this connection can't read status"
+    raw = " ".join(v or "--" for v in st.get("raw", {}).values())
+    if not st.get("responded"):
+        return f"no status reply (DLE EOT 1-4: {raw})"
+    yn = lambda v, t, f: "?" if v is None else (t if v else f)  # noqa: E731
+    return (f"online: {yn(st['online'], 'yes', 'NO')} | cover: {yn(st['cover_open'], 'OPEN', 'closed')} | "
+            f"paper: {yn(st['paper_end'], 'OUT', 'ok')}"
+            f"{' (low)' if st.get('paper_near_end') else ''} | "
+            f"error: {yn(st['error'], 'YES', 'no')}  [DLE EOT 1-4: {raw}]")

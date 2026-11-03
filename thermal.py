@@ -11,12 +11,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from photo_printer import imaging, jobs, printers
-from photo_printer.commands import blocking_problem
+from photo_printer.commands import blocking_problem, describe, status_warning
 
 
 def add_image_args(p: argparse.ArgumentParser) -> None:
@@ -45,10 +44,13 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("detect", help="list every way this computer can reach the printer")
-    sub.add_parser("status", help="read paper/cover/error status (USB, network, serial)")
+    st = sub.add_parser("status", help="read paper/cover/error status (USB, network, serial)")
+    st.add_argument("--debug", action="store_true", help="show every status byte with timings")
     t = sub.add_parser("test", help="print a calibration page")
     t.add_argument("--width", type=int, default=512)
-    sub.add_parser("cut", help="feed a little paper and cut")
+    t.add_argument("--no-check", dest="check", action="store_false", help="skip the status check")
+    c = sub.add_parser("cut", help="feed a little paper and cut")
+    c.add_argument("--no-check", dest="check", action="store_false", help="skip the status check")
 
     pv = sub.add_parser("preview", help="save the dithered result as PNG (no printing)")
     pv.add_argument("image")
@@ -59,6 +61,7 @@ def main(argv=None) -> int:
     pr.add_argument("image")
     pr.add_argument("--no-cut", dest="cut", action="store_false")
     pr.add_argument("--band", type=int, default=256, help="rows per raster command (try 64 if prints glitch)")
+    pr.add_argument("--no-check", dest="check", action="store_false", help="skip the status check")
     add_image_args(pr)
 
     app = sub.add_parser("app", help="start the web app")
@@ -89,21 +92,25 @@ def main(argv=None) -> int:
         printer = printers.open_printer(args.printer)
 
         if args.cmd == "status":
+            if args.debug and hasattr(printer, "debug_status"):
+                print("\n".join(printer.debug_status()))
             st = printer.status()
-            if st is None:
-                print(f"{printer.name}: this connection can't read printer status (that's normal for CUPS).")
-            else:
-                print(f"{printer.name}:\n{json.dumps(st, indent=2)}")
-                problem = blocking_problem(st)
-                print("\n" + (problem or ("Ready to print." if st["responded"] else
-                                          "No status reply - printing may still work.")))
+            print(f"{printer.name}: {describe(st)}")
+            if st and st.get("port"):
+                print(f"USB port status: {st['port']}")
+            if st is not None:
+                print(blocking_problem(st) or status_warning(st) or
+                      ("Ready to print." if st["responded"] else "No status reply - printing may still work."))
             return 0
         if args.cmd == "test":
-            job = jobs.print_test_page(printer, args.width)
+            job = jobs.print_test_page(printer, args.width, check=args.check)
         elif args.cmd == "cut":
-            job = jobs.feed_and_cut(printer)
+            job = jobs.feed_and_cut(printer, check=args.check)
         else:  # print
-            job = jobs.print_photo(printer, args.image, settings_from(args), cut=args.cut, band=args.band)
+            job = jobs.print_photo(printer, args.image, settings_from(args), cut=args.cut,
+                                   band=args.band, check=args.check)
+        if job.get("warning"):
+            print(f"Warning: {job['warning']}")
         print(f"Sent job {job['id']} to {job['printer']} ({job['bytes']} bytes"
               + (f", {job['length_mm']} mm of paper" if "length_mm" in job else "") + ").")
         return 0

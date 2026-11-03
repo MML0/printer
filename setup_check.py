@@ -154,8 +154,8 @@ def main():
     step("5. USB details")
     run([VPY, os.path.abspath(__file__), "--probe"], timeout=60, tail=60)
 
-    step("6. Printer status")
-    code, out = run([VPY, "thermal.py", "status"], timeout=60, tail=30)
+    step("6. Printer status (detailed)")
+    code, out = run([VPY, "thermal.py", "status", "--debug"], timeout=60, tail=30)
     found = code == 0
 
     step("7. Test page")
@@ -164,10 +164,12 @@ def main():
     elif not sys.stdin.isatty():
         log("  [--] skipped (not interactive). Run:  .venv/bin/python thermal.py test")
     else:
+        log("  Before answering: lid closed, paper loaded, green light on?")
         ans = input("  Print a test page now? It uses about 15 cm of paper. [y/N] ").strip().lower()
         _lines.append(f"  Print a test page now? -> {ans or 'n'}")
         if ans in ("y", "yes"):
-            code, _ = run([VPY, "thermal.py", "test"], timeout=120)
+            # --no-check: send it even if the status reply looks wrong, to see what really happens
+            code, _ = run([VPY, "thermal.py", "test", "--no-check"], timeout=120)
             if code == 0:
                 ans = input("  Did a page come out with text and 5 gray bars? [y/n] ").strip().lower()
                 _lines.append(f"  Page came out OK? -> {ans}")

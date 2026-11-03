@@ -232,7 +232,7 @@ async function action(path, label, body) {
       setMsg(j.error + (j.partial ? " (may be half-printed — check the paper)" : ""), "bad");
     } else {
       const extra = j.job.length_mm ? ` · ${j.job.length_mm} mm` : "";
-      setMsg(`Sent to ${j.job.printer}${extra}`, "ok");
+      setMsg(`Sent to ${j.job.printer}${extra}` + (j.job.warning ? ` — ${j.job.warning}` : ""), j.job.warning ? "warn" : "ok");
     }
   } catch (e) { setMsg("Lost connection to the app: " + e.message, "bad"); }
   buttons.forEach((b) => (b.disabled = false));
@@ -249,6 +249,7 @@ async function checkPrinter(spec) {
     if (j.error) { $("dot").className = "dot bad"; $("pstatus").textContent = j.error; return; }
     if (j.problem) { $("dot").className = "dot bad"; $("pstatus").textContent = j.problem; return; }
     const st = j.status;
+    if (j.warning) { $("dot").className = "dot warn"; $("pstatus").textContent = `${j.printer} · ${j.warning}`; return; }
     if (!st || !st.responded) { $("dot").className = "dot warn"; $("pstatus").textContent = `${j.printer} · no status reply`; return; }
     $("dot").className = "dot ok";
     $("pstatus").textContent = `${j.printer} · ready` + (st.paper_near_end ? " (paper low)" : "");

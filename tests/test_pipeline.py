@@ -129,6 +129,15 @@ class EscPosTest(unittest.TestCase):
         garbage = commands.parse_status({1: 0xFF, 2: 0x00})
         self.assertFalse(garbage["responded"])
 
+    def test_offline_without_reason_warns_but_does_not_block(self):
+        st = commands.parse_status({1: 0x1E, 2: None, 3: None, 4: None})
+        self.assertIsNone(commands.blocking_problem(st))
+        self.assertIn("offline", commands.status_warning(st))
+        self.assertIn("online: NO", commands.describe(st))
+        self.assertIn("no status reply", commands.describe(commands.parse_status({1: None})))
+        self.assertEqual(commands.parse_port_status(0x18)["paper_empty"], False)
+        self.assertEqual(commands.parse_port_status(0x38)["paper_empty"], True)
+
 
 class JobTest(unittest.TestCase):
     def test_print_photo_to_file(self):
@@ -165,11 +174,21 @@ except ImportError:
 class UsbTransportTest(unittest.TestCase):
     """USB logic with a fake device (no hardware needed)."""
 
-    def make(self, fail_after=None, max_per_write=None):
+    def make(self, fail_after=None, max_per_write=None, replies=None):
         import usb.core
         received = bytearray()
 
+        class InEp:
+            bEndpointAddress = 0x81
+
+            def read(self, n, timeout):
+                if not replies:
+                    raise usb.core.USBTimeoutError("Operation timed out")
+                return bytes([replies.pop(0)])
+
         class Ep:
+            bEndpointAddress = 0x02
+
             def write(self, data, timeout):
                 if fail_after is not None and len(received) >= fail_after:
                     raise usb.core.USBTimeoutError("Operation timed out")
@@ -178,7 +197,7 @@ class UsbTransportTest(unittest.TestCase):
                 return len(data)
 
         p = printers.UsbPrinter()
-        p._open = lambda: (object(), 0, Ep(), None, False)
+        p._open = lambda: (object(), 0, Ep(), InEp() if replies is not None else None, False)
         p._close = lambda *a: None
         return p, received
 
@@ -187,6 +206,17 @@ class UsbTransportTest(unittest.TestCase):
         data = bytes(range(256)) * 100
         p.send(data)
         self.assertEqual(bytes(received), data)
+
+    def test_status_reads_one_reply_per_query(self):
+        p, _ = self.make(replies=[0x16, 0x12, 0x12, 0x12])
+        st = p.status()
+        self.assertTrue(st["responded"] and st["online"])
+        self.assertIsNone(st["port"])  # fake device has no control endpoint
+
+    def test_status_survives_silent_printer(self):
+        p, _ = self.make(replies=[])
+        self.assertFalse(p.status()["responded"])
+        self.assertTrue(any("DLE EOT 4" in line for line in p.debug_status()))
 
     def test_timeout_is_reported_as_partial(self):
         p, _ = self.make(fail_after=8192)
