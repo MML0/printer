@@ -36,8 +36,10 @@ DEFAULT_BAND = 48
 # visible band in dark areas). Side-by-side prints were smoothest with tiny pieces:
 # a segment ends once it holds BLACK_BUDGET rows' worth of black dots (~2 rows at
 # 50%), followed by PAUSE_PER_BLACK_ROW per row's worth. Light areas don't wait.
+# Pause length: a 70% strip in these pieces survived 0.025, 0.012 and 0.006 s per
+# row's worth but reset with no pause at all; 0.015 keeps a 2x margin.
 BLACK_BUDGET = 1.0
-PAUSE_PER_BLACK_ROW = 0.05
+PAUSE_PER_BLACK_ROW = 0.015
 MIN_SEGMENT_ROWS = 2
 
 
