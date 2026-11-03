@@ -31,6 +31,7 @@ class Settings:
     contrast: float = 1.0       # 1.0 = unchanged
     gamma: float = 1.0          # >1 lightens midtones, <1 darkens them
     sharpness: float = 1.0      # 1.0 = unchanged, 2.0 = sharper
+    max_black: float = 1.0      # darkest tone: 0.8 = black areas become 80% dots
     auto_contrast: bool = True  # stretch the histogram first (good for photos)
     dither: str = "floyd_steinberg"
     threshold: int = 128        # only used by dither="threshold"
@@ -43,6 +44,7 @@ class Settings:
         "contrast": (0.0, 3.0),
         "gamma": (0.2, 5.0),
         "sharpness": (0.0, 5.0),
+        "max_black": (0.5, 1.0),
         "threshold": (0, 255),
     }
 
@@ -156,6 +158,11 @@ def adjust(gray: Image.Image, s: Settings) -> Image.Image:
         im = ImageEnhance.Sharpness(im).enhance(s.sharpness)
     if s.invert:
         im = ImageOps.invert(im)
+    if s.max_black < 1.0:
+        # Lift the black point: fewer dots in dark areas, so less current per line
+        # and less "ink" spreading. Thermal dots spread, so 85% still looks black.
+        lo = (1.0 - s.max_black) * 255
+        im = im.point([round(lo + v * (255 - lo) / 255) for v in range(256)])
     return im
 
 

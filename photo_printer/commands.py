@@ -24,8 +24,9 @@ SIZE_NORMAL, SIZE_DOUBLE = GS + b"!\x00", GS + b"!\x11"
 PARTIAL_CUT = GS + b"V\x01"
 
 # A single GS v 0 command can describe a huge image, but sending it in bands
-# keeps every command small and well inside what the printer is built for.
-DEFAULT_BAND = 256
+# keeps every command small. 48 rows = 3 KB, below the 56-row bands of the test
+# page that printed fine on the SRP-350III (a 256-row photo stopped after ~1 cm).
+DEFAULT_BAND = 48
 
 
 def feed_lines(n: int) -> bytes:

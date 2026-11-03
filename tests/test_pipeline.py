@@ -85,6 +85,15 @@ class PipelineTest(unittest.TestCase):
             out = imaging.dither(flat, imaging.Settings(dither=name))
             self.assertAlmostEqual(np.asarray(out).mean(), 64 / 255, delta=0.03, msg=name)
 
+    def test_max_black_reduces_dots(self):
+        full = 1 - np.asarray(imaging.render(self.gray, imaging.Settings())).mean()
+        limited = 1 - np.asarray(imaging.render(self.gray, imaging.Settings(max_black=0.8))).mean()
+        self.assertLess(limited, full)
+        solid = imaging.dither(imaging.adjust(Image.new("L", (64, 64), 0),
+                                              imaging.Settings(width=64, max_black=0.8, auto_contrast=False)),
+                               imaging.Settings(width=64))
+        self.assertAlmostEqual(1 - np.asarray(solid).mean(), 0.8, delta=0.03)
+
     def test_rotate_90_swaps_orientation(self):
         tall = Image.new("L", (300, 600), 128)
         out = imaging.render(tall, imaging.Settings(rotate=90))
@@ -111,7 +120,8 @@ class EscPosTest(unittest.TestCase):
 
     def test_test_page_is_clean(self):
         bands, text, cut = decode(jobs.test_page(512))
-        self.assertEqual(len(bands), 1 + len(imaging.DITHERS))
+        self.assertEqual(sum(b.shape[0] for b in bands), 40 + 56 * len(imaging.DITHERS))
+        self.assertTrue(all(b.shape[0] <= commands.DEFAULT_BAND for b in bands))
         self.assertIn("PHOTO PRINTER TEST", text)
         self.assertTrue(cut)
 
@@ -197,7 +207,8 @@ class UsbTransportTest(unittest.TestCase):
                 return len(data)
 
         p = printers.UsbPrinter()
-        p._open = lambda: (object(), 0, Ep(), InEp() if replies is not None else None, False)
+        dev = type("Dev", (), {"idVendor": 0x1504, "idProduct": 0x2B})()
+        p._open = lambda: (dev, 0, Ep(), InEp() if replies is not None else None, False)
         p._close = lambda *a: None
         return p, received
 
@@ -266,10 +277,28 @@ class UsbTransportTest(unittest.TestCase):
 
     def test_timeout_is_reported_as_partial(self):
         p, _ = self.make(fail_after=8192)
-        with self.assertRaises(printers.PrinterError) as ctx:
-            p.send(b"x" * 20000)
+        orig = printers.list_usb
+        printers.list_usb = lambda: [{"vid": 0x1504, "pid": 0x2B}]  # printer still attached
+        try:
+            with self.assertRaises(printers.PrinterError) as ctx:
+                p.send(b"x" * 20000)
+        finally:
+            printers.list_usb = orig
         self.assertTrue(ctx.exception.partial)
         self.assertIn("8192 of 20000", str(ctx.exception))
+        self.assertIn("Check paper/cover", str(ctx.exception))
+
+    def test_printer_vanishing_mid_job_is_explained(self):
+        p, _ = self.make(fail_after=57344)
+        orig = printers.list_usb
+        printers.list_usb = lambda: []  # printer rebooted and dropped off USB
+        try:
+            with self.assertRaises(printers.PrinterError) as ctx:
+                p.send(b"x" * 58283)
+        finally:
+            printers.list_usb = orig
+        self.assertIn("disconnected in the middle", str(ctx.exception))
+        self.assertTrue(ctx.exception.partial)
 
 
 if __name__ == "__main__":

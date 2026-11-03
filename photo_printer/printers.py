@@ -190,7 +190,8 @@ class UsbPrinter(Printer):
     def send(self, data: bytes) -> None:
         import usb.core
         dev, n, ep_out, _ep_in, detached = self._open()
-        sent = 0
+        ids = (getattr(dev, "idVendor", None), getattr(dev, "idProduct", None))
+        sent, error = 0, None
         try:
             while sent < len(data):
                 chunk = data[sent:sent + USB_CHUNK]
@@ -199,12 +200,23 @@ class UsbPrinter(Printer):
                     raise usb.core.USBError("wrote 0 bytes")
                 sent += written
         except usb.core.USBError as e:
-            raise PrinterError(
-                f"USB transfer stopped after {sent} of {len(data)} bytes ({e}). "
-                "Check paper/cover. Part of the image may already be printed.",
-                partial=sent > 0)
+            error = e
         finally:
             self._close(dev, n, detached)
+        if error is None:
+            return
+        time.sleep(0.5)
+        if not any((d["vid"], d["pid"]) == ids for d in list_usb()):
+            raise PrinterError(
+                f"The printer disconnected in the middle of the job ({sent} of {len(data)} bytes sent) - "
+                "it most likely restarted. Dark photos draw a lot of power: use the original 24 V 2.5 A "
+                "adapter, plug the printer straight into the Mac (not a hub), or lower 'Max black' / "
+                "raise brightness. Wait for the printer to come back before printing again.",
+                partial=sent > 0)
+        raise PrinterError(
+            f"USB transfer stopped after {sent} of {len(data)} bytes ({error}). "
+            "Check paper/cover. Part of the image may already be printed.",
+            partial=sent > 0)
 
     @staticmethod
     def _port_status(dev, n) -> int | None:

@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from photo_printer import imaging, jobs, printers
+from photo_printer import commands, imaging, jobs, printers
 from photo_printer.commands import blocking_problem, describe, status_warning
 
 
@@ -26,6 +26,8 @@ def add_image_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--contrast", type=float, default=d.contrast, help="1.0 = unchanged")
     g.add_argument("--gamma", type=float, default=d.gamma, help=">1 lightens midtones")
     g.add_argument("--sharpness", type=float, default=d.sharpness, help="1.0 = unchanged")
+    g.add_argument("--max-black", dest="max_black", type=float, default=d.max_black,
+                   help="darkest tone, 0.5-1.0 (lower = fewer black dots, less power)")
     g.add_argument("--dither", choices=imaging.DITHERS, default=d.dither)
     g.add_argument("--threshold", type=int, default=d.threshold, help="for --dither threshold")
     g.add_argument("--rotate", type=int, choices=(0, 90, 180, 270), default=d.rotate)
@@ -60,7 +62,7 @@ def main(argv=None) -> int:
     pr = sub.add_parser("print", help="print a photo")
     pr.add_argument("image")
     pr.add_argument("--no-cut", dest="cut", action="store_false")
-    pr.add_argument("--band", type=int, default=256, help="rows per raster command (try 64 if prints glitch)")
+    pr.add_argument("--band", type=int, default=commands.DEFAULT_BAND, help="rows per raster command")
     pr.add_argument("--no-check", dest="check", action="store_false", help="skip the status check")
     add_image_args(pr)
 
