@@ -101,3 +101,4 @@ All settings: `--width --brightness --contrast --gamma --sharpness --dither --th
 ```bash
 python3 -m unittest discover tests
 ```
+# printer
