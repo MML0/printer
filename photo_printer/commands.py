@@ -28,6 +28,14 @@ PARTIAL_CUT = GS + b"V\x01"
 # page that printed fine on the SRP-350III (a 256-row photo stopped after ~1 cm).
 DEFAULT_BAND = 48
 
+# GS r 1 ("transmit paper sensor status") is answered only when the printer reaches
+# it in its input buffer, i.e. once everything before it has been processed. The
+# USB sender puts one after every segment and waits for the answer, so the Mac never
+# gets more than ~2 segments ahead of the paper. Without this, the SRP-350III took
+# 24-57 KB at full USB speed, printed ~1 cm and then reset.
+SYNC = GS + b"r\x01"
+SEGMENT_ROWS = 96
+
 
 def feed_lines(n: int) -> bytes:
     return ESC + b"d" + bytes([max(0, min(255, n))])
@@ -60,15 +68,25 @@ def raster(img: Image.Image, band: int = DEFAULT_BAND) -> bytes:
     return bytes(out)
 
 
+def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4,
+                   band: int = DEFAULT_BAND, rows: int = SEGMENT_ROWS) -> list[bytes]:
+    """The print job for one image, split at band boundaries every `rows` rows.
+    Joined together the segments are a complete, self-contained job."""
+    if img.mode != "1":
+        img = img.convert("1")
+    rows = max(band, rows)
+    segs = [img.crop((0, y, img.width, min(img.height, y + rows)))
+            for y in range(0, img.height, rows)] or [img]
+    out = [raster(s, band) for s in segs]
+    out[0] = INIT + ALIGN_CENTER + out[0]
+    out[-1] += feed_lines(feed) + (PARTIAL_CUT if cut else b"")
+    return out
+
+
 def image_job(img: Image.Image, *, cut: bool = True, feed: int = 4,
               band: int = DEFAULT_BAND) -> bytes:
     """A complete, self-contained print job for one image."""
-    job = bytearray(INIT + ALIGN_CENTER)
-    job += raster(img, band)
-    job += feed_lines(feed)
-    if cut:
-        job += PARTIAL_CUT
-    return bytes(job)
+    return b"".join(image_segments(img, cut=cut, feed=feed, band=band))
 
 
 # --------------------------------------------------------------------------- status

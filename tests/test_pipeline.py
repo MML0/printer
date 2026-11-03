@@ -250,6 +250,62 @@ class UsbTransportTest(unittest.TestCase):
         p._close = lambda *a: None
         return p
 
+    def pacing_printer(self, answer: bool):
+        """Fake that records the order of writes and answers GS r 1 if `answer`."""
+        log, ready = [], bytearray()
+
+        class InEp:
+            bEndpointAddress = 0x81
+
+            def read(self, n, timeout):
+                out = bytes(ready)
+                ready.clear()
+                return out
+
+        class OutEp:
+            bEndpointAddress = 0x02
+
+            def write(self, data, timeout):
+                data = bytes(data)
+                if data == commands.SYNC:
+                    log.append("sync")
+                    if answer:
+                        ready.append(0x00)
+                else:
+                    log.append(data)
+                return len(data)
+
+        p = printers.UsbPrinter()
+        p._open = lambda: (object(), 0, OutEp(), InEp(), False)
+        p._close = lambda *a: None
+        return p, log
+
+    def test_segments_join_to_the_plain_job(self):
+        bmp = Image.fromarray((np.random.default_rng(1).random((300, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
+        segs = commands.image_segments(bmp)
+        self.assertEqual(len(segs), 4)  # 96 + 96 + 96 + 12 rows
+        self.assertEqual(b"".join(segs), commands.image_job(bmp))
+        bands, _, cut = decode(b"".join(segs))
+        self.assertEqual(sum(b.shape[0] for b in bands), 300)
+        self.assertTrue(cut)
+
+    def test_paced_send_waits_for_answers(self):
+        p, log = self.pacing_printer(answer=True)
+        p.send([b"a" * 10, b"b" * 10, b"c" * 10])
+        self.assertEqual(log, [b"a" * 10, "sync", b"b" * 10, "sync", b"c" * 10])
+        self.assertEqual(p.flow, "sync")
+
+    def test_paced_send_falls_back_when_printer_is_silent(self):
+        p, log = self.pacing_printer(answer=False)
+        saved = printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S
+        printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S = 0.05, 0
+        try:
+            p.send([b"a", b"b", b"c", b"d"])
+        finally:
+            printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S = saved
+        self.assertEqual(p.flow, "timed")
+        self.assertEqual([x for x in log if x != "sync"], [b"a", b"b", b"c", b"d"])
+
     def test_status_with_late_answers_and_leftovers(self):
         p = self.bixolon_like(stale=bytes([0x16, 0x12, 0x12, 0x1E, 0x1E]))
         st = p.status()

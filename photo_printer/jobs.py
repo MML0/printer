@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from . import commands, imaging
+from . import printers
 from .printers import Printer, PrinterError
 
 LOG_PATH = Path(__file__).resolve().parent.parent / "print-jobs.log"
@@ -34,15 +35,17 @@ def preflight(printer: Printer) -> dict | None:
     return st
 
 
-def send_job(printer: Printer, data: bytes, kind: str, extra: dict | None = None,
+def send_job(printer: Printer, data: bytes | list[bytes], kind: str, extra: dict | None = None,
              check: bool = True) -> dict:
     """Send one job. check=False skips the status check (for when status reading misbehaves)."""
     job = {"id": uuid.uuid4().hex[:8], "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-           "kind": kind, "printer": printer.name, "bytes": len(data), **(extra or {})}
+           "kind": kind, "printer": printer.name, "bytes": printers.job_size(data), **(extra or {})}
     try:
         if check:
             job["status_before"] = preflight(printer)
             job["warning"] = commands.status_warning(job["status_before"])
+        if not isinstance(data, (bytes, bytearray)) and not printer.paced:
+            data = b"".join(data)
         printer.send(data)
     except PrinterError as e:
         job["result"] = "unknown" if e.partial else "failed"
@@ -51,6 +54,8 @@ def send_job(printer: Printer, data: bytes, kind: str, extra: dict | None = None
         raise
     job["result"] = "sent"
     job["printer"] = printer.name  # USB fills in the exact device after opening it
+    if getattr(printer, "flow", None):
+        job["flow"] = printer.flow
     _log(job)
     return job
 
@@ -60,7 +65,7 @@ def print_bitmap(printer: Printer, bitmap: Image.Image, *, cut: bool = True,
     if bitmap.height > max_rows:
         raise PrinterError(f"Image is {bitmap.height} dots tall ({bitmap.height / DPI * 25.4:.0f} mm); "
                            f"the limit is {max_rows}. Use rotate=90 or a smaller width.")
-    data = commands.image_job(bitmap, cut=cut, band=band)
+    data = commands.image_segments(bitmap, cut=cut, band=band)
     return send_job(printer, data, "photo", {
         "width": bitmap.width, "height": bitmap.height,
         "length_mm": round(bitmap.height / DPI * 25.4, 1)}, check=check)

@@ -29,6 +29,12 @@ NAME_HINTS = ("bixolon", "srp-350", "srp350", "srp_350")
 
 USB_CHUNK = 4096
 USB_TIMEOUT_MS = 20000  # per chunk; a paused printer (no paper) triggers this
+SYNC_TIMEOUT_S = 20     # how long to wait for a GS r answer before giving up on pacing
+UNPACED_DELAY_S = 1.0   # per segment, when the printer never answers GS r
+
+
+def job_size(data: bytes | list[bytes]) -> int:
+    return len(data) if isinstance(data, (bytes, bytearray)) else sum(map(len, data))
 
 
 class PrinterError(Exception):
@@ -41,6 +47,7 @@ class PrinterError(Exception):
 
 class Printer:
     name = "printer"
+    paced = False  # True: send() takes a list of segments and waits for the paper between them
 
     def send(self, data: bytes) -> None:
         raise NotImplementedError
@@ -187,18 +194,41 @@ class UsbPrinter(Printer):
             pass
         usb.util.dispose_resources(dev)
 
-    def send(self, data: bytes) -> None:
+    paced = True
+    flow = None
+
+    def send(self, data: bytes | list[bytes]) -> None:
+        """Send a job. A list of segments is paced: after each segment a GS r 1 goes out,
+        and the next-but-one segment waits until the printer has answered it."""
         import usb.core
-        dev, n, ep_out, _ep_in, detached = self._open()
+        segments = [bytes(data)] if isinstance(data, (bytes, bytearray)) else list(data)
+        total = job_size(segments)
+        dev, n, ep_out, ep_in, detached = self._open()
         ids = (getattr(dev, "idVendor", None), getattr(dev, "idProduct", None))
         sent, error = 0, None
+        self.flow = None if len(segments) == 1 else ("sync" if ep_in is not None else "timed")
+        asked = answered = 0
         try:
-            while sent < len(data):
-                chunk = data[sent:sent + USB_CHUNK]
-                written = ep_out.write(chunk, USB_TIMEOUT_MS)
-                if written <= 0:
-                    raise usb.core.USBError("wrote 0 bytes")
-                sent += written
+            if ep_in is not None and len(segments) > 1:
+                self._drain(ep_in)
+            for i, seg in enumerate(segments):
+                pos = 0
+                while pos < len(seg):
+                    written = ep_out.write(seg[pos:pos + USB_CHUNK], USB_TIMEOUT_MS)
+                    if written <= 0:
+                        raise usb.core.USBError("wrote 0 bytes")
+                    pos += written
+                    sent += written
+                if i == len(segments) - 1:
+                    break
+                if self.flow == "sync":
+                    ep_out.write(commands.SYNC, USB_TIMEOUT_MS)
+                    asked += 1
+                    answered += self._await(ep_in, asked - 1 - answered)
+                    if answered < asked - 1:
+                        self.flow = "timed"  # printer ignores GS r: fall back to fixed pauses
+                if self.flow == "timed":
+                    time.sleep(UNPACED_DELAY_S)
         except usb.core.USBError as e:
             error = e
         finally:
@@ -208,15 +238,22 @@ class UsbPrinter(Printer):
         time.sleep(0.5)
         if not any((d["vid"], d["pid"]) == ids for d in list_usb()):
             raise PrinterError(
-                f"The printer disconnected in the middle of the job ({sent} of {len(data)} bytes sent) - "
-                "it most likely restarted. Dark photos draw a lot of power: use the original 24 V 2.5 A "
-                "adapter, plug the printer straight into the Mac (not a hub), or lower 'Max black' / "
-                "raise brightness. Wait for the printer to come back before printing again.",
+                f"The printer disconnected in the middle of the job ({sent} of {total} bytes sent) - "
+                "it most likely restarted. Wait for it to come back, then try again. If it keeps happening: "
+                "plug it straight into the Mac (not a hub), use the original 24 V adapter, or lower "
+                "'Max black'.",
                 partial=sent > 0)
         raise PrinterError(
-            f"USB transfer stopped after {sent} of {len(data)} bytes ({error}). "
+            f"USB transfer stopped after {sent} of {total} bytes ({error}). "
             "Check paper/cover. Part of the image may already be printed.",
             partial=sent > 0)
+
+    def _await(self, ep_in, n: int) -> int:
+        """Wait for up to `n` GS r answers (one byte each); return how many arrived."""
+        got, t0 = 0, time.monotonic()
+        while got < n and time.monotonic() - t0 < SYNC_TIMEOUT_S:
+            got += len(self._read(ep_in, 200))
+        return min(got, n)
 
     @staticmethod
     def _port_status(dev, n) -> int | None:
