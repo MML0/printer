@@ -251,20 +251,33 @@ class UsbTransportTest(unittest.TestCase):
         return p
 
     def test_segments_join_to_the_plain_job(self):
-        bmp = Image.fromarray((np.random.default_rng(1).random((40, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
+        bmp = Image.fromarray((np.random.default_rng(1).random((100, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
         segs = commands.image_segments(bmp)
-        self.assertEqual(len(segs), 3)  # 16 + 16 + 8 rows
+        self.assertGreater(len(segs), 1)
         self.assertEqual(b"".join(seg for seg, _ in segs), commands.image_job(bmp))
         bands, _, cut = decode(b"".join(seg for seg, _ in segs))
-        self.assertEqual(sum(b.shape[0] for b in bands), 40)
+        self.assertEqual(sum(b.shape[0] for b in bands), 100)
         self.assertTrue(cut)
 
-    def test_darker_segments_pause_longer(self):
-        a = np.full((48, 512), 255, dtype=np.uint8)
-        a[16:32, :256] = 0   # half black
-        a[32:48, :] = 0      # all black
-        pauses = [p for _, p in commands.image_segments(Image.fromarray(a).convert("1"))]
-        self.assertEqual(pauses, [0.0, commands.PAUSE_FULL_BLACK / 2, commands.PAUSE_FULL_BLACK])
+    def test_light_rows_need_no_break_and_dark_rows_rest(self):
+        light = np.full(400, 0.04)                       # 16 rows' worth in total
+        self.assertEqual(commands.segment_rows(light), [(0, 400)])
+        dark = np.full(200, 0.6)
+        dark[30] = 0.1                                   # a light row near the first limit
+        runs = commands.segment_rows(dark)
+        self.assertEqual(runs[0], (0, 31))               # breaks right after the light row
+        self.assertEqual(runs[-1][1], 200)
+        self.assertTrue(all(b == c for (_, b), (c, _) in zip(runs, runs[1:])))
+        for y0, y1 in runs:
+            self.assertLessEqual(dark[y0:y1].sum(), commands.BLACK_BUDGET + 1)
+
+    def test_pause_grows_with_black_and_last_segment_does_not_wait(self):
+        a = np.full((120, 512), 255, dtype=np.uint8)
+        a[:, :256] = 0                                   # 50% black everywhere
+        segs = commands.image_segments(Image.fromarray(a).convert("1"))
+        pauses = [p for _, p in segs]
+        self.assertEqual(pauses[-1], 0.0)
+        self.assertAlmostEqual(pauses[0], commands.PAUSE_PER_BLACK_ROW * commands.BLACK_BUDGET)
 
     def test_paced_send_sleeps_between_segments(self):
         p, received = self.make()
