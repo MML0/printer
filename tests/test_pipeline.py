@@ -257,7 +257,10 @@ class UsbTransportTest(unittest.TestCase):
         self.assertEqual(b"".join(seg for seg, _ in segs), commands.image_job(bmp))
         bands, _, cut = decode(b"".join(seg for seg, _ in segs))
         self.assertEqual(sum(b.shape[0] for b in bands), 40)
+        self.assertEqual(len(bands), 1)  # one GS v 0 across all segments: no white lines
         self.assertTrue(cut)
+        bands, _, _ = decode(b"".join(seg for seg, _ in commands.image_segments(bmp, band=24)))
+        self.assertEqual([b.shape[0] for b in bands], [24, 16])
 
     def test_darker_segments_pause_longer(self):
         a = np.full((48, 512), 255, dtype=np.uint8)
