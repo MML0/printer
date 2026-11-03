@@ -5,3 +5,4 @@ __pycache__/
 print-jobs.log
 *-preview.png
 *.bin
+setup-report.txt

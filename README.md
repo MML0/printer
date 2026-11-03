@@ -3,6 +3,15 @@
 Print photos on a **BIXOLON SRP-350III** (80 mm thermal receipt printer, 180 dpi, 512 dots wide)
 from a Mac, with live preview and controls for dithering, brightness, contrast, gamma and sharpness.
 
+## Quick start
+
+```bash
+python3 setup_check.py
+```
+
+Installs everything, looks for the printer, offers a test page, and saves `setup-report.txt`.
+The steps below do the same thing by hand.
+
 ## 1. Install (once)
 
 ```bash
