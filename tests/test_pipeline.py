@@ -250,61 +250,32 @@ class UsbTransportTest(unittest.TestCase):
         p._close = lambda *a: None
         return p
 
-    def pacing_printer(self, answer: bool):
-        """Fake that records the order of writes and answers GS r 1 if `answer`."""
-        log, ready = [], bytearray()
-
-        class InEp:
-            bEndpointAddress = 0x81
-
-            def read(self, n, timeout):
-                out = bytes(ready)
-                ready.clear()
-                return out
-
-        class OutEp:
-            bEndpointAddress = 0x02
-
-            def write(self, data, timeout):
-                data = bytes(data)
-                if data == commands.SYNC:
-                    log.append("sync")
-                    if answer:
-                        ready.append(0x00)
-                else:
-                    log.append(data)
-                return len(data)
-
-        p = printers.UsbPrinter()
-        p._open = lambda: (object(), 0, OutEp(), InEp(), False)
-        p._close = lambda *a: None
-        return p, log
-
     def test_segments_join_to_the_plain_job(self):
-        bmp = Image.fromarray((np.random.default_rng(1).random((300, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
+        bmp = Image.fromarray((np.random.default_rng(1).random((40, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
         segs = commands.image_segments(bmp)
-        self.assertEqual(len(segs), 4)  # 96 + 96 + 96 + 12 rows
-        self.assertEqual(b"".join(segs), commands.image_job(bmp))
-        bands, _, cut = decode(b"".join(segs))
-        self.assertEqual(sum(b.shape[0] for b in bands), 300)
+        self.assertEqual(len(segs), 3)  # 16 + 16 + 8 rows
+        self.assertEqual(b"".join(seg for seg, _ in segs), commands.image_job(bmp))
+        bands, _, cut = decode(b"".join(seg for seg, _ in segs))
+        self.assertEqual(sum(b.shape[0] for b in bands), 40)
         self.assertTrue(cut)
 
-    def test_paced_send_waits_for_answers(self):
-        p, log = self.pacing_printer(answer=True)
-        p.send([b"a" * 10, b"b" * 10, b"c" * 10])
-        self.assertEqual(log, [b"a" * 10, "sync", b"b" * 10, "sync", b"c" * 10])
-        self.assertEqual(p.flow, "sync")
+    def test_darker_segments_pause_longer(self):
+        a = np.full((48, 512), 255, dtype=np.uint8)
+        a[16:32, :256] = 0   # half black
+        a[32:48, :] = 0      # all black
+        pauses = [p for _, p in commands.image_segments(Image.fromarray(a).convert("1"))]
+        self.assertEqual(pauses, [0.0, commands.PAUSE_FULL_BLACK / 2, commands.PAUSE_FULL_BLACK])
 
-    def test_paced_send_falls_back_when_printer_is_silent(self):
-        p, log = self.pacing_printer(answer=False)
-        saved = printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S
-        printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S = 0.05, 0
+    def test_paced_send_sleeps_between_segments(self):
+        p, received = self.make()
+        slept, orig = [], printers.time.sleep
+        printers.time.sleep = slept.append
         try:
-            p.send([b"a", b"b", b"c", b"d"])
+            p.send([(b"a" * 10, 0.0), (b"b" * 10, 0.25), (b"c" * 10, 0.5)])
         finally:
-            printers.SYNC_TIMEOUT_S, printers.UNPACED_DELAY_S = saved
-        self.assertEqual(p.flow, "timed")
-        self.assertEqual([x for x in log if x != "sync"], [b"a", b"b", b"c", b"d"])
+            printers.time.sleep = orig
+        self.assertEqual(bytes(received), b"a" * 10 + b"b" * 10 + b"c" * 10)
+        self.assertEqual(slept, [0.25, 0.5])
 
     def test_status_with_late_answers_and_leftovers(self):
         p = self.bixolon_like(stale=bytes([0x16, 0x12, 0x12, 0x1E, 0x1E]))

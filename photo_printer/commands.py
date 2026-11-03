@@ -28,13 +28,13 @@ PARTIAL_CUT = GS + b"V\x01"
 # page that printed fine on the SRP-350III (a 256-row photo stopped after ~1 cm).
 DEFAULT_BAND = 48
 
-# GS r 1 ("transmit paper sensor status") is answered only when the printer reaches
-# it in its input buffer, i.e. once everything before it has been processed. The
-# USB sender puts one after every segment and waits for the answer, so the Mac never
-# gets more than ~2 segments ahead of the paper. Without this, the SRP-350III took
-# 24-57 KB at full USB speed, printed ~1 cm and then reset.
-SYNC = GS + b"r\x01"
-SEGMENT_ROWS = 96
+# The SRP-350III's power supply can't keep up with long dark stretches: a 50%-black
+# strip reset the printer (it dropped off USB for ~4 s) after ~1 cm, a 15% strip
+# printed fine, and the same 50% strip survived when sent 16 rows at a time with
+# 0.4 s pauses. So photos go out in 16-row segments, each followed by a pause that
+# grows with its share of black dots (white rows don't wait at all).
+SEGMENT_ROWS = 16
+PAUSE_FULL_BLACK = 0.8  # seconds after an all-black segment
 
 
 def feed_lines(n: int) -> bytes:
@@ -68,25 +68,24 @@ def raster(img: Image.Image, band: int = DEFAULT_BAND) -> bytes:
     return bytes(out)
 
 
-def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4,
-                   band: int = DEFAULT_BAND, rows: int = SEGMENT_ROWS) -> list[bytes]:
-    """The print job for one image, split at band boundaries every `rows` rows.
-    Joined together the segments are a complete, self-contained job."""
+def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4, band: int = DEFAULT_BAND,
+                   rows: int = SEGMENT_ROWS, pause: float = PAUSE_FULL_BLACK) -> list[tuple[bytes, float]]:
+    """The print job for one image as (bytes, seconds to wait afterwards) segments of
+    `rows` rows. Joined together the bytes are a complete, self-contained job."""
     if img.mode != "1":
         img = img.convert("1")
-    rows = max(band, rows)
     segs = [img.crop((0, y, img.width, min(img.height, y + rows)))
             for y in range(0, img.height, rows)] or [img]
-    out = [raster(s, band) for s in segs]
-    out[0] = INIT + ALIGN_CENTER + out[0]
-    out[-1] += feed_lines(feed) + (PARTIAL_CUT if cut else b"")
-    return out
+    out = [[raster(s, band), pause * float((~np.asarray(s, dtype=bool)).mean())] for s in segs]
+    out[0][0] = INIT + ALIGN_CENTER + out[0][0]
+    out[-1][0] += feed_lines(feed) + (PARTIAL_CUT if cut else b"")
+    return [(data, wait) for data, wait in out]
 
 
 def image_job(img: Image.Image, *, cut: bool = True, feed: int = 4,
               band: int = DEFAULT_BAND) -> bytes:
     """A complete, self-contained print job for one image."""
-    return b"".join(image_segments(img, cut=cut, feed=feed, band=band))
+    return b"".join(data for data, _ in image_segments(img, cut=cut, feed=feed, band=band))
 
 
 # --------------------------------------------------------------------------- status

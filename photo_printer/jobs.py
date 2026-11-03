@@ -35,7 +35,7 @@ def preflight(printer: Printer) -> dict | None:
     return st
 
 
-def send_job(printer: Printer, data: bytes | list[bytes], kind: str, extra: dict | None = None,
+def send_job(printer: Printer, data: bytes | list[tuple[bytes, float]], kind: str, extra: dict | None = None,
              check: bool = True) -> dict:
     """Send one job. check=False skips the status check (for when status reading misbehaves)."""
     job = {"id": uuid.uuid4().hex[:8], "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -45,7 +45,7 @@ def send_job(printer: Printer, data: bytes | list[bytes], kind: str, extra: dict
             job["status_before"] = preflight(printer)
             job["warning"] = commands.status_warning(job["status_before"])
         if not isinstance(data, (bytes, bytearray)) and not printer.paced:
-            data = b"".join(data)
+            data = b"".join(seg for seg, _ in data)
         printer.send(data)
     except PrinterError as e:
         job["result"] = "unknown" if e.partial else "failed"
@@ -54,8 +54,6 @@ def send_job(printer: Printer, data: bytes | list[bytes], kind: str, extra: dict
         raise
     job["result"] = "sent"
     job["printer"] = printer.name  # USB fills in the exact device after opening it
-    if getattr(printer, "flow", None):
-        job["flow"] = printer.flow
     _log(job)
     return job
 

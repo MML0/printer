@@ -29,12 +29,10 @@ NAME_HINTS = ("bixolon", "srp-350", "srp350", "srp_350")
 
 USB_CHUNK = 4096
 USB_TIMEOUT_MS = 20000  # per chunk; a paused printer (no paper) triggers this
-SYNC_TIMEOUT_S = 20     # how long to wait for a GS r answer before giving up on pacing
-UNPACED_DELAY_S = 1.0   # per segment, when the printer never answers GS r
 
 
-def job_size(data: bytes | list[bytes]) -> int:
-    return len(data) if isinstance(data, (bytes, bytearray)) else sum(map(len, data))
+def job_size(data: bytes | list[tuple[bytes, float]]) -> int:
+    return len(data) if isinstance(data, (bytes, bytearray)) else sum(len(seg) for seg, _ in data)
 
 
 class PrinterError(Exception):
@@ -47,7 +45,7 @@ class PrinterError(Exception):
 
 class Printer:
     name = "printer"
-    paced = False  # True: send() takes a list of segments and waits for the paper between them
+    paced = False  # True: send() also takes [(bytes, pause seconds), ...] segments
 
     def send(self, data: bytes) -> None:
         raise NotImplementedError
@@ -195,23 +193,17 @@ class UsbPrinter(Printer):
         usb.util.dispose_resources(dev)
 
     paced = True
-    flow = None
 
-    def send(self, data: bytes | list[bytes]) -> None:
-        """Send a job. A list of segments is paced: after each segment a GS r 1 goes out,
-        and the next-but-one segment waits until the printer has answered it."""
+    def send(self, data: bytes | list[tuple[bytes, float]]) -> None:
+        """Send a job; for segments, wait each one's pause before sending the next."""
         import usb.core
-        segments = [bytes(data)] if isinstance(data, (bytes, bytearray)) else list(data)
+        segments = [(bytes(data), 0.0)] if isinstance(data, (bytes, bytearray)) else list(data)
         total = job_size(segments)
-        dev, n, ep_out, ep_in, detached = self._open()
+        dev, n, ep_out, _ep_in, detached = self._open()
         ids = (getattr(dev, "idVendor", None), getattr(dev, "idProduct", None))
         sent, error = 0, None
-        self.flow = None if len(segments) == 1 else ("sync" if ep_in is not None else "timed")
-        asked = answered = 0
         try:
-            if ep_in is not None and len(segments) > 1:
-                self._drain(ep_in)
-            for i, seg in enumerate(segments):
+            for seg, pause in segments:
                 pos = 0
                 while pos < len(seg):
                     written = ep_out.write(seg[pos:pos + USB_CHUNK], USB_TIMEOUT_MS)
@@ -219,16 +211,8 @@ class UsbPrinter(Printer):
                         raise usb.core.USBError("wrote 0 bytes")
                     pos += written
                     sent += written
-                if i == len(segments) - 1:
-                    break
-                if self.flow == "sync":
-                    ep_out.write(commands.SYNC, USB_TIMEOUT_MS)
-                    asked += 1
-                    answered += self._await(ep_in, asked - 1 - answered)
-                    if answered < asked - 1:
-                        self.flow = "timed"  # printer ignores GS r: fall back to fixed pauses
-                if self.flow == "timed":
-                    time.sleep(UNPACED_DELAY_S)
+                if pause > 0:
+                    time.sleep(pause)
         except usb.core.USBError as e:
             error = e
         finally:
@@ -247,13 +231,6 @@ class UsbPrinter(Printer):
             f"USB transfer stopped after {sent} of {total} bytes ({error}). "
             "Check paper/cover. Part of the image may already be printed.",
             partial=sent > 0)
-
-    def _await(self, ep_in, n: int) -> int:
-        """Wait for up to `n` GS r answers (one byte each); return how many arrived."""
-        got, t0 = 0, time.monotonic()
-        while got < n and time.monotonic() - t0 < SYNC_TIMEOUT_S:
-            got += len(self._read(ep_in, 200))
-        return min(got, n)
 
     @staticmethod
     def _port_status(dev, n) -> int | None:
