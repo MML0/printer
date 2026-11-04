@@ -159,6 +159,30 @@ class JobTest(unittest.TestCase):
             bands, _, _ = decode(Path(out).read_bytes())
             self.assertEqual(sum(b.shape[0] for b in bands), job["height"])
 
+    def test_chunk_settings_reach_the_printer(self):
+        class Recorder(printers.Printer):
+            paced = True
+
+            def send(self, data):
+                self.data = data
+
+        a = np.full((120, 512), 255, dtype=np.uint8)
+        a[:, :256] = 0                                   # 50% black
+        bmp = Image.fromarray(a).convert("1")
+        p = Recorder()
+        job = jobs.print_bitmap(p, bmp, check=False, settings=imaging.Settings(chunk=4, pause_ms=20))
+        self.assertEqual(len(p.data), 15)                # 8 rows (4 rows' worth of black) per chunk
+        self.assertAlmostEqual(p.data[0][1], 0.08)
+        self.assertEqual(job["chunks"]["count"], 15)
+        job = jobs.print_bitmap(p, bmp, check=False, settings=imaging.Settings(chunked=False))
+        self.assertIsInstance(p.data, bytes)             # one piece, no pauses
+        self.assertIsNone(job["chunks"])
+        self.assertEqual([b.shape[0] for b in decode(p.data)[0]], [48, 48, 24])  # plain bands
+
+    def test_chunk_settings_are_clamped(self):
+        s = imaging.Settings.from_dict({"chunk": 0, "pause_ms": -5, "hide_lines": 999, "chunked": "false"})
+        self.assertEqual((s.chunk, s.pause_ms, s.hide_lines, s.chunked), (0.5, 0.0, 64, False))
+
     def test_refuses_absurdly_long_print(self):
         tall = Image.new("1", (512, 5000), 1)
         with self.assertRaises(printers.PrinterError):
@@ -254,8 +278,9 @@ class UsbTransportTest(unittest.TestCase):
         bmp = Image.fromarray((np.random.default_rng(1).random((100, 512)) > 0.5).astype(np.uint8) * 255).convert("1")
         segs = commands.image_segments(bmp)
         self.assertGreater(len(segs), 1)
-        self.assertEqual(b"".join(seg for seg, _ in segs), commands.image_job(bmp))
         bands, _, cut = decode(b"".join(seg for seg, _ in segs))
+        plain, _, _ = decode(commands.image_job(bmp))
+        self.assertTrue(np.array_equal(np.vstack(bands), np.vstack(plain)))  # same dots either way
         self.assertEqual(sum(b.shape[0] for b in bands), 100)
         self.assertTrue(cut)
 
@@ -264,8 +289,9 @@ class UsbTransportTest(unittest.TestCase):
         self.assertEqual(commands.segment_rows(light, budget=20, min_rows=8), [(0, 400)])
         dark = np.full(200, 0.6)
         dark[30] = 0.1                                   # a light row near the first limit
-        runs = commands.segment_rows(dark, budget=20, min_rows=8)
-        self.assertEqual(runs[0], (0, 31))               # breaks right after the light row
+        self.assertEqual(commands.segment_rows(dark, budget=20, min_rows=8)[0], (0, 35))
+        runs = commands.segment_rows(dark, budget=20, min_rows=8, look_back=16)
+        self.assertEqual(runs[0], (0, 31))               # hide_lines: breaks right after the light row
         self.assertEqual(runs[-1][1], 200)
         self.assertTrue(all(b == c for (_, b), (c, _) in zip(runs, runs[1:])))
         for y0, y1 in runs:

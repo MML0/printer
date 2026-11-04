@@ -59,19 +59,29 @@ def send_job(printer: Printer, data: bytes | list[tuple[bytes, float]], kind: st
 
 
 def print_bitmap(printer: Printer, bitmap: Image.Image, *, cut: bool = True,
-                 band: int = commands.DEFAULT_BAND, max_rows: int = MAX_ROWS, check: bool = True) -> dict:
+                 band: int = commands.DEFAULT_BAND, max_rows: int = MAX_ROWS, check: bool = True,
+                 settings: imaging.Settings | None = None) -> dict:
+    """Print a 1-bit image; `settings` supplies the chunk/pause options (defaults if None)."""
     if bitmap.height > max_rows:
         raise PrinterError(f"Image is {bitmap.height} dots tall ({bitmap.height / DPI * 25.4:.0f} mm); "
                            f"the limit is {max_rows}. Use rotate=90 or a smaller width.")
-    data = commands.image_segments(bitmap, cut=cut, band=band)
-    return send_job(printer, data, "photo", {
-        "width": bitmap.width, "height": bitmap.height,
-        "length_mm": round(bitmap.height / DPI * 25.4, 1)}, check=check)
+    s = settings or imaging.Settings()
+    extra = {"width": bitmap.width, "height": bitmap.height,
+             "length_mm": round(bitmap.height / DPI * 25.4, 1)}
+    if s.chunked:
+        data = commands.image_segments(bitmap, cut=cut, band=band, budget=s.chunk,
+                                       pause=s.pause_ms / 1000, look_back=s.hide_lines)
+        extra["chunks"] = {"count": len(data), "chunk": s.chunk, "pause_ms": s.pause_ms,
+                           "hide_lines": s.hide_lines, "pauses_s": round(sum(w for _, w in data), 1)}
+    else:
+        data = commands.image_job(bitmap, cut=cut, band=band)
+        extra["chunks"] = None
+    return send_job(printer, data, "photo", extra, check=check)
 
 
 def print_photo(printer: Printer, src, settings: imaging.Settings, **kw) -> dict:
     gray = src if isinstance(src, Image.Image) else imaging.load_image(src)
-    return print_bitmap(printer, imaging.render(gray, settings), **kw)
+    return print_bitmap(printer, imaging.render(gray, settings), settings=settings, **kw)
 
 
 # --------------------------------------------------------------------------- test page

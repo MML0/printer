@@ -33,6 +33,13 @@ def add_image_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--rotate", type=int, choices=(0, 90, 180, 270), default=d.rotate)
     g.add_argument("--invert", action="store_true")
     g.add_argument("--no-autocontrast", dest="auto_contrast", action="store_false")
+    c = p.add_argument_group("chunks (pauses that keep a weak power supply from resetting the printer)")
+    c.add_argument("--no-chunks", dest="chunked", action="store_false", help="send the photo all at once")
+    c.add_argument("--chunk", type=float, default=d.chunk, help="rows' worth of black dots per chunk")
+    c.add_argument("--pause-ms", dest="pause_ms", type=float, default=d.pause_ms,
+                   help="pause per row's worth of black dots")
+    c.add_argument("--hide-lines", dest="hide_lines", type=int, default=d.hide_lines,
+                   help="let a chunk end up to N rows early, on a lighter row")
 
 
 def settings_from(args) -> imaging.Settings:

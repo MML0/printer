@@ -109,7 +109,8 @@ def make_handler(state: State):
                 if self.path == "/api/print":
                     s, body = self._settings()
                     bitmap = self._render(s)
-                    return self._run_job(lambda p: jobs.print_bitmap(p, bitmap, cut=body.get("cut", True)))
+                    return self._run_job(lambda p: jobs.print_bitmap(p, bitmap, cut=body.get("cut", True),
+                                                                       settings=s))
                 if self.path == "/api/test":
                     s, _ = self._settings()
                     return self._run_job(lambda p: jobs.print_test_page(p, s.width))

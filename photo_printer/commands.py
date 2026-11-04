@@ -38,6 +38,8 @@ DEFAULT_BAND = 48
 # 50%), followed by PAUSE_PER_BLACK_ROW per row's worth. Light areas don't wait.
 # Pause length: a 70% strip in these pieces survived 0.025, 0.012 and 0.006 s per
 # row's worth but reset with no pause at all; 0.015 keeps a 2x margin.
+# All of these can be changed per print from the web app (a printer with a stronger
+# supply can print without chunks at all).
 BLACK_BUDGET = 1.0
 PAUSE_PER_BLACK_ROW = 0.015
 MIN_SEGMENT_ROWS = 2
@@ -74,15 +76,16 @@ def raster(img: Image.Image, band: int = DEFAULT_BAND) -> bytes:
     return bytes(out)
 
 
-def segment_rows(black: np.ndarray, budget: float = BLACK_BUDGET,
-                 min_rows: int = MIN_SEGMENT_ROWS) -> list[tuple[int, int]]:
+def segment_rows(black: np.ndarray, budget: float = BLACK_BUDGET, min_rows: int = MIN_SEGMENT_ROWS,
+                 look_back: int = 0) -> list[tuple[int, int]]:
     """Split rows (per-row share of black dots) into (start, end) runs that each hold
-    at most ~`budget` rows' worth of black, ending each run at its lightest late row."""
+    at most ~`budget` rows' worth of black. With `look_back`, a run may end up to that
+    many rows early, after the lightest row there, where the pause line shows least."""
     runs, start, acc = [], 0, 0.0
     for r, b in enumerate(black):
         acc += b
         if acc >= budget and r + 1 - start >= min_rows:
-            lo = start + (r + 1 - start) // 2          # break somewhere in the second half
+            lo = max(start + min_rows - 1, r - look_back)
             window = black[lo:r + 1]                    # latest row that is about the lightest
             end = lo + int(np.flatnonzero(window <= window.min() + 0.03)[-1]) + 1
             runs.append((start, end))
@@ -93,16 +96,17 @@ def segment_rows(black: np.ndarray, budget: float = BLACK_BUDGET,
 
 
 def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4, band: int = DEFAULT_BAND,
-                   budget: float = BLACK_BUDGET, min_rows: int = MIN_SEGMENT_ROWS) -> list[tuple[bytes, float]]:
+                   budget: float = BLACK_BUDGET, min_rows: int = MIN_SEGMENT_ROWS,
+                   pause: float = PAUSE_PER_BLACK_ROW, look_back: int = 0) -> list[tuple[bytes, float]]:
     """The print job for one image as (bytes, seconds to wait afterwards) segments.
     Joined together the bytes are a complete, self-contained job."""
     if img.mode != "1":
         img = img.convert("1")
     black = (~np.asarray(img, dtype=bool)).mean(axis=1)
     out = []
-    for y0, y1 in segment_rows(black, budget, min_rows):
+    for y0, y1 in segment_rows(black, budget, min_rows, look_back):
         seg = img.crop((0, y0, img.width, y1))
-        out.append([raster(seg, band) if y1 > y0 else b"", PAUSE_PER_BLACK_ROW * float(black[y0:y1].sum())])
+        out.append([raster(seg, band) if y1 > y0 else b"", pause * float(black[y0:y1].sum())])
     out[-1][1] = 0.0
     out[0][0] = INIT + ALIGN_CENTER + out[0][0]
     out[-1][0] += feed_lines(feed) + (PARTIAL_CUT if cut else b"")
@@ -111,8 +115,8 @@ def image_segments(img: Image.Image, *, cut: bool = True, feed: int = 4, band: i
 
 def image_job(img: Image.Image, *, cut: bool = True, feed: int = 4,
               band: int = DEFAULT_BAND) -> bytes:
-    """A complete, self-contained print job for one image."""
-    return b"".join(data for data, _ in image_segments(img, cut=cut, feed=feed, band=band))
+    """A complete, self-contained print job for one image, sent without pauses."""
+    return INIT + ALIGN_CENTER + raster(img, band) + feed_lines(feed) + (PARTIAL_CUT if cut else b"")
 
 
 # --------------------------------------------------------------------------- status

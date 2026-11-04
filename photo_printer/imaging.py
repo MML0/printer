@@ -37,6 +37,12 @@ class Settings:
     threshold: int = 128        # only used by dither="threshold"
     invert: bool = False
     rotate: int = 0             # 0 / 90 / 180 / 270 (90 = landscape printed big)
+    # Printing in chunks with pauses keeps a weak power supply from resetting the
+    # printer on dark photos (see commands.py). They don't change the preview.
+    chunked: bool = True        # False: send the whole photo at once
+    chunk: float = 1.0          # rows' worth of black dots per chunk (1.0 = ~2 rows at 50% grey)
+    pause_ms: float = 15.0      # pause after a chunk, per row's worth of black dots
+    hide_lines: int = 0         # let a chunk end up to this many rows early, on a lighter row
 
     _LIMITS = {
         "width": (8, 1024),
@@ -46,6 +52,9 @@ class Settings:
         "sharpness": (0.0, 5.0),
         "max_black": (0.5, 1.0),
         "threshold": (0, 255),
+        "chunk": (0.5, 64.0),
+        "pause_ms": (0.0, 200.0),
+        "hide_lines": (0, 64),
     }
 
     @classmethod

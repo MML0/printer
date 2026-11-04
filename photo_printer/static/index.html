@@ -129,6 +129,15 @@
     </div>
 
     <div>
+      <h2>Chunks</h2>
+      <div class="checks"><label><input type="checkbox" id="chunked"> Print in chunks with pauses</label></div>
+      <div class="row chunkRow"><label for="chunk">Chunk size</label><input type="range" id="chunk" min="0.5" max="16" step="0.5"><output></output></div>
+      <div class="row chunkRow"><label for="pause_ms">Pause (ms)</label><input type="range" id="pause_ms" min="0" max="60" step="1"><output></output></div>
+      <div class="row chunkRow"><label for="hide_lines">Hide lines</label><input type="range" id="hide_lines" min="0" max="32" step="1"><output></output></div>
+      <p class="hint">Pauses stop a weak power supply from resetting the printer on dark photos. Chunk size: rows of black per chunk (1 ≈ 2 rows of mid-grey); bigger = fewer pauses but more visible lines. Pause: per row of black; too low and dark photos reset the printer. Hide lines: lets a chunk end up to N rows early, on a lighter row, where the line shows less. Turn chunks off for a printer that copes without them.</p>
+    </div>
+
+    <div>
       <button class="print" id="print" disabled>Print</button>
       <div class="actions">
         <button id="test">Test page</button>
@@ -151,8 +160,12 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const SLIDERS = ["brightness", "contrast", "gamma", "sharpness", "max_black", "width", "threshold"];
-const CHECKS = ["auto_contrast", "invert"];
+const SLIDERS = ["brightness", "contrast", "gamma", "sharpness", "max_black", "width", "threshold",
+                 "chunk", "pause_ms", "hide_lines"];
+const CHECKS = ["auto_contrast", "invert", "chunked"];
+// Printer settings, not image settings: presets and Reset leave them alone.
+const PRINTER_KEYS = ["chunked", "chunk", "pause_ms", "hide_lines"];
+const keepPrinter = () => Object.fromEntries(PRINTER_KEYS.map((k) => [k, settings[k]]));
 const PRESETS = {
   "Default":               {},
   "Portrait":              {brightness: 1.05, contrast: 1.1, gamma: 1.25, sharpness: 1.6},
@@ -167,13 +180,17 @@ let defaults = {}, settings = {}, hasImage = false, inflight = null, timer = nul
 function load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
 function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
 
-function fmt(id, v) { return id === "width" || id === "threshold" ? String(Math.round(v)) : Number(v).toFixed(2); }
+function fmt(id, v) {
+  if (["width", "threshold", "pause_ms", "hide_lines"].includes(id)) return String(Math.round(v));
+  return Number(v).toFixed(id === "chunk" ? 1 : 2);
+}
 
 function syncUI() {
   for (const id of SLIDERS) { $(id).value = settings[id]; $(id).nextElementSibling.value = fmt(id, settings[id]); }
   for (const id of CHECKS) $(id).checked = !!settings[id];
   $("dither").value = settings.dither;
   $("thresholdRow").classList.toggle("off", settings.dither !== "threshold");
+  for (const r of document.querySelectorAll(".chunkRow")) r.classList.toggle("off", !settings.chunked);
   for (const b of $("rotate").children) b.classList.toggle("on", Number(b.dataset.r) === settings.rotate);
 }
 
@@ -232,7 +249,9 @@ async function action(path, label, body) {
     if (!r.ok) {
       setMsg(j.error + (j.partial ? " (may be half-printed — check the paper)" : ""), "bad");
     } else {
-      const extra = j.job.length_mm ? ` · ${j.job.length_mm} mm` : "";
+      const c = j.job.chunks;
+      const extra = (j.job.length_mm ? ` · ${j.job.length_mm} mm` : "")
+        + (c ? ` · ${c.count} chunks, ${c.pauses_s} s of pauses` : c === null ? " · no chunks" : "");
       setMsg(`Sent to ${j.job.printer}${extra}` + (j.job.warning ? ` — ${j.job.warning}` : ""), j.job.warning ? "warn" : "ok");
     }
   } catch (e) { setMsg("Lost connection to the app: " + e.message, "bad"); }
@@ -276,10 +295,10 @@ $("dither").addEventListener("change", (e) => { settings.dither = e.target.value
 $("rotate").addEventListener("click", (e) => { if (e.target.dataset.r) { settings.rotate = Number(e.target.dataset.r); changed(); } });
 $("preset").addEventListener("change", (e) => {
   if (!e.target.value) return;
-  settings = { ...defaults, width: settings.width, rotate: settings.rotate, ...PRESETS[e.target.value] };
+  settings = { ...defaults, width: settings.width, rotate: settings.rotate, ...keepPrinter(), ...PRESETS[e.target.value] };
   e.target.value = ""; changed();
 });
-$("reset").addEventListener("click", () => { settings = { ...defaults }; changed(); setMsg(""); });
+$("reset").addEventListener("click", () => { settings = { ...defaults, ...keepPrinter() }; changed(); setMsg(""); });
 $("compare").addEventListener("change", preview);
 $("preview").addEventListener("click", (e) => e.target.classList.toggle("zoom"));
 $("choose").addEventListener("click", () => $("file").click());
